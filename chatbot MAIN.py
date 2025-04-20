@@ -2,17 +2,16 @@ import streamlit as st
 import pdfplumber
 from docx import Document
 import pandas as pd
-import cv2
-import faiss
 import numpy as np
-import cohere  # For CSV Processing
-import google.generativeai as genai  # For PDF, DOCX, Image, Audio, Video
+import faiss
 import os
 import tempfile
+import wave
+import cohere  # For CSV Processing
+import google.generativeai as genai  # For PDF, DOCX, Image, Audio, Video
 from vosk import Model, KaldiRecognizer
 from sentence_transformers import SentenceTransformer
-import wave
-import easyocr  
+import easyocr  # For OCR
 
 # 👉 Configure API Keys
 COHERE_API_KEY = "2xG3kIglq38EBSeQyzfLcaUny2e2sHYdpbhpXLmo"  # Cohere for CSV
@@ -28,7 +27,7 @@ index = faiss.IndexFlatL2(embedding_dim)
 document_store = {}
 
 # 👉 EasyOCR Reader Initialization
-ocr_reader = easyocr.Reader(["en"])  # Supports multiple languages
+ocr_reader = easyocr.Reader(["en"])
 
 # 👉 Extract text from different file types
 def extract_text_from_pdf(pdf_path):
@@ -44,30 +43,26 @@ def extract_text_from_docx(docx_path):
 
 def extract_text_from_csv(csv_path):
     df = pd.read_csv(csv_path)
-    return df.to_string(index=False)  # Maintain tabular structure
+    return df.to_string(index=False)
 
-# ✅ Using EasyOCR Instead of Tesseract
 def extract_text_from_image(uploaded_file):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
             temp_file.write(uploaded_file.read())
             temp_path = temp_file.name
-        
-        result = ocr_reader.readtext(temp_path, detail=0)  # Extract text
+        result = ocr_reader.readtext(temp_path, detail=0)
         return "\n".join(result) if result else "❌ No text found in the image."
     except Exception as e:
         return f"❌ Image OCR Error: {str(e)}"
 
-# ✅ Fix for video/audio processing (Handles Vosk path properly)
 def transcribe_audio_with_vosk(audio_path):
     try:
-        model_path = "vosk-model-small-en-us-0.15"  # Ensure this model exists
+        model_path = "vosk-model-small-en-us-0.15"
         if not os.path.exists(model_path):
             return "❌ Vosk model not found. Please download and set the correct path."
 
         wf = wave.open(audio_path, "rb")
         rec = KaldiRecognizer(Model(model_path), wf.getframerate())
-
         text = ""
         while True:
             data = wf.readframes(4000)
@@ -85,19 +80,17 @@ def store_text_in_faiss(text, doc_id):
     index.add(np.array([embedding]))
     document_store[index.ntotal - 1] = text
 
-# 👉 Search relevant text from FAISS (Retrieves only top 3 matches & limits words)
+# 👉 Search relevant text from FAISS
 def search_in_faiss(query):
     query_embedding = embedding_model.encode(query).astype(np.float32)
-    distances, indices = index.search(np.array([query_embedding]), k=3)  # Retrieve top 3 matches
-    
+    distances, indices = index.search(np.array([query_embedding]), k=3)
     results = []
-    for idx in indices[0]:  
+    for idx in indices[0]:
         if idx in document_store:
-            results.append(document_store[idx])  
+            results.append(document_store[idx])
+    return [" ".join(result.split()[:100]) for result in results]
 
-    return [" ".join(result.split()[:100]) for result in results]  # Limit each result to 100 words
-
-# 👉 Generate response using Gemini (for all except CSV)
+# 👉 Generate response using Gemini
 def generate_response_gemini(prompt):
     try:
         model = genai.GenerativeModel("gemini-1.5-pro")
@@ -106,13 +99,11 @@ def generate_response_gemini(prompt):
     except Exception as e:
         return f"❌ Gemini API Error: {str(e)}"
 
-# 👉 Generate response using Cohere (for CSV) - Prevents token limit errors
+# 👉 Generate response using Cohere (for CSVs)
 def generate_response_cohere(prompt):
-    MAX_TOKENS = 3500  # Keep token usage safe
-    
+    MAX_TOKENS = 3500
     if len(prompt.split()) > MAX_TOKENS:
-        prompt = "Summarize and answer concisely:\n\n" + " ".join(prompt.split()[:2000])  # Truncate safely
-
+        prompt = "Summarize and answer concisely:\n\n" + " ".join(prompt.split()[:2000])
     try:
         response = co.generate(model="command", prompt=prompt, max_tokens=150)
         return response.generations[0].text.strip()
@@ -127,22 +118,22 @@ uploaded_file = st.file_uploader("📂 Upload a document (PDF, DOCX, CSV, Image,
 if uploaded_file is not None:
     file_type = uploaded_file.type
     text_data = ""
-    use_cohere = False  # Default to Gemini
-    
+    use_cohere = False
+
     if "pdf" in file_type:
         text_data = extract_text_from_pdf(uploaded_file)
     elif "word" in file_type:
         text_data = extract_text_from_docx(uploaded_file)
     elif "csv" in file_type:
         text_data = extract_text_from_csv(uploaded_file)
-        use_cohere = True  # Use Cohere for CSV
+        use_cohere = True
     elif "image" in file_type:
-        text_data = extract_text_from_image(uploaded_file)  # ✅ Using EasyOCR
+        text_data = extract_text_from_image(uploaded_file)
     elif "audio" in file_type or "video" in file_type:
         with open("temp_audio.wav", "wb") as f:
             f.write(uploaded_file.read())
         text_data = transcribe_audio_with_vosk("temp_audio.wav")
-    
+
     store_text_in_faiss(text_data, uploaded_file.name)
     st.success(f"✅ {uploaded_file.name} has been processed and stored!")
 
@@ -152,6 +143,5 @@ query = st.text_input("🔍 Enter your question:")
 if query:
     retrieved_texts = search_in_faiss(query)
     prompt = f"Using the following information:\n\n{retrieved_texts}\n\nAnswer the question: {query}"
-    
     response = generate_response_cohere(prompt) if use_cohere else generate_response_gemini(prompt)
     st.write(response)
