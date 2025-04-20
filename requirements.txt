@@ -1,0 +1,12 @@
+streamlit
+pdfplumber
+python-docx
+pandas
+opencv-python
+faiss-cpu
+numpy
+cohere
+google-generativeai
+vosk
+sentence-transformers
+easyocr
